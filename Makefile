@@ -79,21 +79,11 @@ build: ## 构建生产版本
 	NODE_ENV=production $(PNPM) build
 
 start: build ## 构建并后台启动生产服务器 (nohup 模式)
-	@set -e; \
-	echo "🔍 检查旧 next 进程..."; \
-	pkill -f "next start" 2>/dev/null || true; \
-	echo "🔍 检查端口 $(PORT) 占用..."; \
-	lsof -ti:$(PORT) 2>/dev/null | xargs kill -9 2>/dev/null || true; \
-	sleep 1; \
-	mkdir -p $(LOG_DIR); \
-	echo "🚀 后台启动生产服务器 (端口: $(PORT), nohup)..."; \
-	nohup $(PNPM) start --hostname 0.0.0.0 --port $(PORT) > $(LOG_DIR)/server.log 2>&1 & \
-	echo $$! > .server.pid; \
-	echo "📝 进程 PID: $$(cat .server.pid)"; \
-	sleep 3; \
-	echo ""; \
-	echo "========================================"; \
-	if lsof -ti:$(PORT) > /dev/null 2>&1; then \
+	@PORT=$(PORT) LOG_DIR=$(LOG_DIR) bash scripts/start.sh
+	@sleep 4
+	@echo ""
+	@echo "========================================" 
+	@if lsof -ti:$(PORT) > /dev/null 2>&1; then \
 		echo " ✅ 服务启动成功!"; \
 		echo ""; \
 		echo " 📍 本地访问: http://localhost:$(PORT)"; \
@@ -108,9 +98,8 @@ start: build ## 构建并后台启动生产服务器 (nohup 模式)
 	else \
 		echo " ❌ 启动失败，请查看日志: $(LOG_DIR)/server.log"; \
 		exit 1; \
-	fi; \
-	echo "========================================"
-
+	fi
+	@echo "========================================"
 stop: ## 停止本地生产服务器
 	@echo "🛑 停止生产服务器..."
 	@pkill -f "next start" 2>/dev/null || true
@@ -138,33 +127,7 @@ status: ## 查看服务运行状态
 		echo "状态: 🔴 未运行"; \
 	fi
 
-_guard_script: ## 生成守护脚本 (内部使用)
-	@mkdir -p scripts
-	@echo '#!/bin/bash' > scripts/guard.sh
-	@echo '# 自动生成，请勿手动修改' >> scripts/guard.sh
-	@echo '# 由 make monitor / make unmonitor 管理' >> scripts/guard.sh
-	@echo '' >> scripts/guard.sh
-	@echo 'PROJECT_DIR=$(PWD)' >> scripts/guard.sh
-	@echo 'PORT=$(PORT)' >> scripts/guard.sh
-	@echo 'LOG_DIR=$(LOG_DIR)' >> scripts/guard.sh
-	@echo 'MONITOR_LOG="$$LOG_DIR/monitor.log"' >> scripts/guard.sh
-	@echo '' >> scripts/guard.sh
-	@echo 'cd "$$PROJECT_DIR" || exit 1' >> scripts/guard.sh
-	@echo '' >> scripts/guard.sh
-	@echo '# 检查端口是否存活' >> scripts/guard.sh
-	@echo 'if ! lsof -ti:$$PORT > /dev/null 2>&1; then' >> scripts/guard.sh
-	@echo '    echo "$$(date "+%Y-%m-%d %H:%M:%S") [ALERT] 端口 $$PORT 无响应，尝试自动重启..." >> "$$MONITOR_LOG"' >> scripts/guard.sh
-	@echo '    PATH="$$PATH:/opt/homebrew/bin:/usr/local/bin:$$HOME/.local/bin"' >> scripts/guard.sh
-	@echo '    make start >> "$$MONITOR_LOG" 2>&1' >> scripts/guard.sh
-	@echo '    if lsof -ti:$$PORT > /dev/null 2>&1; then' >> scripts/guard.sh
-	@echo '        echo "$$(date "+%Y-%m-%d %H:%M:%S") [ OK ] 自动重启成功" >> "$$MONITOR_LOG"' >> scripts/guard.sh
-	@echo '    else' >> scripts/guard.sh
-	@echo '        echo "$$(date "+%Y-%m-%d %H:%M:%S") [FAIL] 自动重启失败!" >> "$$MONITOR_LOG"' >> scripts/guard.sh
-	@echo '    fi' >> scripts/guard.sh
-	@echo 'fi' >> scripts/guard.sh
-	@chmod +x scripts/guard.sh
-
-monitor: _guard_script ## 启动定时守护（定时检查存活并自动重启）
+monitor: ## 启动定时守护（定时检查存活并自动重启）
 	@echo "🔧 安装定时守护 (每 $(MONITOR_INTERVAL) 分钟检查一次)..."
 	@(crontab -l 2>/dev/null | grep -v "scripts/guard.sh"; \
 	  echo "*/$(MONITOR_INTERVAL) * * * * /bin/bash $(PWD)/scripts/guard.sh") | crontab -
@@ -176,7 +139,6 @@ monitor: _guard_script ## 启动定时守护（定时检查存活并自动重启
 unmonitor: ## 关闭定时守护
 	@echo "🛑 移除定时守护..."
 	@crontab -l 2>/dev/null | grep -v "scripts/guard.sh" | crontab - || true
-	@rm -f scripts/guard.sh
 	@echo "✅ 定时守护已关闭"
 
 lint: ## 运行 ESLint 代码检查
@@ -199,7 +161,6 @@ clean: ## 清理构建产物和缓存
 	rm -rf public/sw.js public/workbox-*.js
 	rm -rf $(LOG_DIR)
 	rm -f .server.pid
-	rm -f scripts/guard.sh
 	@echo "✅ 清理完成"
 
 ## ==================== Docker 部署 ====================
