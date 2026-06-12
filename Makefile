@@ -79,24 +79,37 @@ build: ## 构建生产版本
 	NODE_ENV=production $(PNPM) build
 
 start: build ## 构建并后台启动生产服务器 (nohup 模式)
-	@echo "🔍 检查旧 next 进程..."
-	@pkill -f "next start" 2>/dev/null || true
-	@echo "🔍 检查端口 $(PORT) 占用..."
-	@lsof -ti:$(PORT) 2>/dev/null | xargs kill -9 2>/dev/null || true
-	@sleep 1
-	@mkdir -p $(LOG_DIR)
-	@echo "🚀 后台启动生产服务器 (端口: $(PORT), nohup)..."
-	@nohup $(PNPM) start --port $(PORT) > $(LOG_DIR)/server.log 2>&1 &
-	@PID=$$!; echo $$PID > .server.pid
-	@echo "📝 进程 PID: $$(cat .server.pid)"
-	@sleep 3
-	@if lsof -ti:$(PORT) > /dev/null 2>&1; then \
-		echo "✅ 服务启动成功! http://localhost:$(PORT)"; \
-		echo "📋 日志: tail -f $(LOG_DIR)/server.log"; \
+	@set -e; \
+	echo "🔍 检查旧 next 进程..."; \
+	pkill -f "next start" 2>/dev/null || true; \
+	echo "🔍 检查端口 $(PORT) 占用..."; \
+	lsof -ti:$(PORT) 2>/dev/null | xargs kill -9 2>/dev/null || true; \
+	sleep 1; \
+	mkdir -p $(LOG_DIR); \
+	echo "🚀 后台启动生产服务器 (端口: $(PORT), nohup)..."; \
+	nohup $(PNPM) start --hostname 0.0.0.0 --port $(PORT) > $(LOG_DIR)/server.log 2>&1 & \
+	echo $$! > .server.pid; \
+	echo "📝 进程 PID: $$(cat .server.pid)"; \
+	sleep 3; \
+	echo ""; \
+	echo "========================================"; \
+	if lsof -ti:$(PORT) > /dev/null 2>&1; then \
+		echo " ✅ 服务启动成功!"; \
+		echo ""; \
+		echo " 📍 本地访问: http://localhost:$(PORT)"; \
+		LOCAL_IP=$$(hostname -I 2>/dev/null | awk '{print $$1}' || echo ""); \
+		if [ -n "$$LOCAL_IP" ]; then \
+			echo " 📍 内网访问: http://$$LOCAL_IP:$(PORT)"; \
+		fi; \
+		echo ""; \
+		echo " 📋 查看日志: tail -f $(LOG_DIR)/server.log"; \
+		echo " 📊 查看状态: make status"; \
+		echo " 🛑 停止服务: make stop"; \
 	else \
-		echo "❌ 启动失败，请查看日志: $(LOG_DIR)/server.log"; \
+		echo " ❌ 启动失败，请查看日志: $(LOG_DIR)/server.log"; \
 		exit 1; \
-	fi
+	fi; \
+	echo "========================================"
 
 stop: ## 停止本地生产服务器
 	@echo "🛑 停止生产服务器..."
