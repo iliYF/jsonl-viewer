@@ -11,14 +11,14 @@
 .DEFAULT_GOAL := help
 
 # 可配置变量
-PORT              ?= 10001         # 服务端口
-NODE_ENV          ?= development   # Node 环境
-IMAGE_NAME        ?= jsonl-viewer  # Docker 镜像名
-IMAGE_TAG         ?= latest        # Docker 镜像标签
-CONTAINER         ?= jsonl-viewer  # Docker 容器名
-LOG_DIR           ?= logs           # 日志目录
-MONITOR_INTERVAL  ?= 1              # 守护检查间隔（分钟）
-PNPM              := npx pnpm      # pnpm 命令
+PORT             ?= 10001
+NODE_ENV         ?= production
+IMAGE_NAME       ?= jsonl-viewer
+IMAGE_TAG        ?= latest
+CONTAINER        ?= jsonl-viewer
+LOG_DIR          ?= logs
+MONITOR_INTERVAL ?= 1
+PNPM             := npx pnpm
 
 ## ==================== 帮助 ====================
 help: ## 显示帮助信息
@@ -69,7 +69,13 @@ dev: ## 启动开发服务器 (支持热重载)
 	@echo "🔍 检查旧 next 进程..."
 	@pkill -f "next dev" 2>/dev/null || true
 	@echo "🔍 检查端口 $(PORT) 占用..."
-	@lsof -ti:$(PORT) 2>/dev/null | xargs kill -9 2>/dev/null || true
+	@if command -v lsof > /dev/null 2>&1; then \
+		lsof -ti:$(PORT) 2>/dev/null | xargs kill -9 2>/dev/null || true; \
+	elif command -v fuser > /dev/null 2>&1; then \
+		fuser -k $(PORT)/tcp 2>/dev/null || true; \
+	else \
+		ss -tlnp "sport = :$(PORT)" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | xargs kill -9 2>/dev/null || true; \
+	fi
 	@sleep 1
 	@echo "🚀 启动开发服务器 (端口: $(PORT))..."
 	$(PNPM) dev --port $(PORT)
@@ -80,10 +86,20 @@ build: ## 构建生产版本
 
 start: build ## 构建并后台启动生产服务器 (nohup 模式)
 	@PORT=$(PORT) LOG_DIR=$(LOG_DIR) bash scripts/start.sh
-	@sleep 4
+	@echo "⏳ 等待服务启动..."
+	@for i in 1 2 3 4 5 6 7 8 9 10; do \
+		if command -v lsof > /dev/null 2>&1; then \
+			lsof -ti:$(PORT) > /dev/null 2>&1 && break; \
+		elif command -v fuser > /dev/null 2>&1; then \
+			fuser $(PORT)/tcp > /dev/null 2>&1 && break; \
+		else \
+			ss -tlnp "sport = :$(PORT)" 2>/dev/null | grep -q LISTEN && break; \
+		fi; \
+		sleep 1; \
+	done
 	@echo ""
 	@echo "========================================" 
-	@if lsof -ti:$(PORT) > /dev/null 2>&1; then \
+	@if command -v lsof > /dev/null 2>&1 && lsof -ti:$(PORT) > /dev/null 2>&1; then \
 		echo " ✅ 服务启动成功!"; \
 		echo ""; \
 		echo " 📍 本地访问: http://localhost:$(PORT)"; \
@@ -92,6 +108,26 @@ start: build ## 构建并后台启动生产服务器 (nohup 模式)
 			echo " 📍 内网访问: http://$$LOCAL_IP:$(PORT)"; \
 		fi; \
 		echo ""; \
+		echo " 📋 查看日志: tail -f $(LOG_DIR)/server.log"; \
+		echo " 📊 查看状态: make status"; \
+		echo " 🛑 停止服务: make stop"; \
+	elif command -v fuser > /dev/null 2>&1 && fuser $(PORT)/tcp > /dev/null 2>&1; then \
+		echo " ✅ 服务启动成功!"; \
+		echo ""; \
+		LOCAL_IP=$$(hostname -I 2>/dev/null | awk '{print $$1}' || echo ""); \
+		if [ -n "$$LOCAL_IP" ]; then \
+			echo " 📍 内网访问: http://$$LOCAL_IP:$(PORT)"; \
+		fi; \
+		echo " 📋 查看日志: tail -f $(LOG_DIR)/server.log"; \
+		echo " 📊 查看状态: make status"; \
+		echo " 🛑 停止服务: make stop"; \
+	elif ss -tlnp "sport = :$(PORT)" 2>/dev/null | grep -q LISTEN; then \
+		echo " ✅ 服务启动成功!"; \
+		echo ""; \
+		LOCAL_IP=$$(hostname -I 2>/dev/null | awk '{print $$1}' || echo ""); \
+		if [ -n "$$LOCAL_IP" ]; then \
+			echo " 📍 内网访问: http://$$LOCAL_IP:$(PORT)"; \
+		fi; \
 		echo " 📋 查看日志: tail -f $(LOG_DIR)/server.log"; \
 		echo " 📊 查看状态: make status"; \
 		echo " 🛑 停止服务: make stop"; \
@@ -112,17 +148,28 @@ stop: ## 停止本地生产服务器
 status: ## 查看服务运行状态
 	@echo "📊 服务状态检查..."
 	@echo "----------------------------------------"
-	@PID=$$(lsof -ti:$(PORT) 2>/dev/null || true); \
+	@PID=$$(if command -v lsof > /dev/null 2>&1; then lsof -ti:$(PORT) 2>/dev/null; \
+	         elif command -v fuser > /dev/null 2>&1; then fuser $(PORT)/tcp 2>/dev/null; fi); \
 	if [ -n "$$PID" ]; then \
 		echo "状态: 🟢 运行中"; \
 		echo "端口: $(PORT)"; \
 		echo "PID : $$PID"; \
-		echo "URL : http://localhost:$(PORT)"; \
+		LOCAL_IP=$$(hostname -I 2>/dev/null | awk '{print $$1}' || echo ""); \
+		if [ -n "$$LOCAL_IP" ]; then \
+			echo "URL : http://$$LOCAL_IP:$(PORT)"; \
+		else \
+			echo "URL : http://localhost:$(PORT)"; \
+		fi; \
 		echo "----------------------------------------"; \
 		if command -v curl > /dev/null 2>&1; then \
 			STATUS=$$(curl -s -o /dev/null -w "%{http_code}" http://localhost:$(PORT) 2>/dev/null || echo "000"); \
 			echo "HTTP: $$STATUS"; \
 		fi; \
+	elif ss -tlnp "sport = :$(PORT)" 2>/dev/null | grep -q LISTEN; then \
+		echo "状态: 🟢 运行中"; \
+		echo "端口: $(PORT)"; \
+		LOCAL_IP=$$(hostname -I 2>/dev/null | awk '{print $$1}' || echo ""); \
+		[ -n "$$LOCAL_IP" ] && echo "URL : http://$$LOCAL_IP:$(PORT)" || echo "URL : http://localhost:$(PORT)"; \
 	else \
 		echo "状态: 🔴 未运行"; \
 	fi
